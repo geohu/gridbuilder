@@ -4,7 +4,7 @@ let n = 0
 const id = (p: string) => `${p}${Date.now().toString(36)}${(n++).toString(36)}`
 const px = (size: number): Track => ({ id: id('c'), size, unit: 'px' })
 const fr = (size = 1): Track => ({ id: id('c'), size, unit: 'fr' })
-const area = (name: string, c: number, r: number, w = 1, h = 1): Area => ({ id: id('a'), name, c, r, w, h })
+const area = (name: string, c: number, r: number, w = 1, h = 1): Area => ({ id: id('a'), name, c, r, w, h, items: [], overflow: 'responsive' })
 
 type Layout = { columns: Track[]; rows: Track[]; areas: Area[] }
 

@@ -1,12 +1,13 @@
-import { Check, Code2, Copy, LayoutGrid, Moon, Redo2, Sun, Undo2, X } from 'lucide-react'
+import { Blocks, Check, Code2, Copy, LayoutGrid, Moon, Redo2, RotateCcw, Save, Sun, Undo2, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Segmented, Tip } from '../components/ui'
 import { cn } from '../lib/hooks'
 import { SPRING } from './chrome'
-import { resolveTracks, toCss, useApp, type Doc, type Theme } from './store'
+import { isDefaultGrid, resolveTracks, toCss, UNTITLED, useApp, useDirty, type Doc, type Theme } from './store'
 import { TEMPLATES } from './templates'
 import { Menu, MenuSep } from './Workspace'
+import { ConfirmDialog, type ConfirmState } from './common'
 
 export function TopBar() {
   const theme = useApp((s) => s.theme)
@@ -14,20 +15,81 @@ export function TopBar() {
   const canUndo = useApp((s) => s.past.length > 0)
   const canRedo = useApp((s) => s.future.length > 0)
   const counts = useApp((s) => `${s.doc.columns.length} × ${s.doc.rows.length}`)
-  const { set, undo, redo } = useApp.getState()
+  const isDefault = useApp((s) => isDefaultGrid(s.doc))
+  const { set, undo, redo, resetGrid } = useApp.getState()
   const [layoutOpen, setLayoutOpen] = useState(false)
   const [cssOpen, setCssOpen] = useState(false)
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null)
+  const [justSaved, setJustSaved] = useState(false)
+  const name = useApp((s) => s.name)
+  const dirty = useDirty()
+  const saved = useApp((s) => s.designs.some((d) => d.id === s.currentId))
+  // Nothing to lose: a brand-new design that hasn't been touched.
+  const hasWork = useApp((s) => dirty && !(s.currentId === null && s.name === UNTITLED && isDefaultGrid(s.doc)))
+
+  const save = () => {
+    useApp.getState().saveDesign()
+    setJustSaved(true)
+  }
+  useEffect(() => {
+    if (!justSaved) return
+    const t = setTimeout(() => setJustSaved(false), 1600)
+    return () => clearTimeout(t)
+  }, [justSaved])
+  // ⌘S saves from anywhere, including while typing in the name field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        save()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  /** Back to the designs list, offering to save unsaved work first. */
+  const exit = () => {
+    const leave = () => useApp.getState().exitToList()
+    if (!hasWork) return leave()
+    setConfirm({
+      title: 'Exit to designs?',
+      body: `“${useApp.getState().name.trim() || UNTITLED}” has unsaved changes.`,
+      actions: [
+        { label: 'Save and exit', primary: true, run: () => (save(), leave()) },
+        { label: 'Discard changes', run: leave },
+      ],
+    })
+  }
 
   return (
     <header className="relative z-40 flex h-12 shrink-0 items-center gap-2 border-b border-line bg-surface px-3">
-      <span className="flex size-7 items-center justify-center rounded-[7px] bg-inverse font-mono text-[10px] font-bold text-on-inverse">CG</span>
-      <span className="text-[14px] font-semibold tracking-tight">Support</span>
-      <span className="hidden font-mono text-[11px] text-fg-3 sm:inline">{counts} grid</span>
+      <button onClick={exit} aria-label="Back to designs" title="Back to designs" className="flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-inverse font-mono text-[10px] font-bold text-on-inverse">CG</button>
+      <input
+        value={name}
+        onChange={(e) => set({ name: e.target.value })}
+        onBlur={(e) => !e.target.value.trim() && set({ name: UNTITLED })}
+        onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+        onFocus={(e) => name === UNTITLED && e.currentTarget.select()}
+        aria-label="Design name"
+        placeholder={UNTITLED}
+        spellCheck={false}
+        className="h-8 max-w-[16rem] min-w-[6rem] rounded-[7px] bg-transparent px-2 text-[14px] font-semibold tracking-tight outline-none [field-sizing:content] hover:bg-hover focus:bg-selected"
+      />
+      <SaveStatus dirty={dirty} saved={saved} justSaved={justSaved} />
+      <span className="hidden font-mono text-[11px] text-fg-3 lg:inline">{counts} grid</span>
 
       <div className="ml-auto flex items-center gap-1">
         <IconBtn label="Undo (⌘Z)" onClick={undo} disabled={!canUndo}><Undo2 size={15} strokeWidth={1.75} /></IconBtn>
         <IconBtn label="Redo (⇧⌘Z)" onClick={redo} disabled={!canRedo}><Redo2 size={15} strokeWidth={1.75} /></IconBtn>
+        <IconBtn label={isDefault ? 'Grid is at default' : 'Reset grid'} onClick={resetGrid} disabled={isDefault}><RotateCcw size={15} strokeWidth={1.75} /></IconBtn>
         <span className="mx-1 h-5 w-px bg-line" />
+        <button
+          onClick={() => set({ library: { open: true, target: null } })}
+          className="flex h-8 items-center gap-1.5 rounded-[8px] px-2.5 text-[13px] font-medium text-fg-2 hover:bg-hover hover:text-fg"
+        >
+          <Blocks size={15} strokeWidth={1.75} /> <span className="hidden sm:inline">Library</span>
+        </button>
         <div className="relative">
           <button
             onClick={() => setLayoutOpen(!layoutOpen)}
@@ -72,9 +134,49 @@ export function TopBar() {
         <IconBtn label={mode === 'light' ? 'Dark mode' : 'Light mode'} onClick={() => set({ mode: mode === 'light' ? 'dark' : 'light' })}>
           {mode === 'light' ? <Moon size={15} strokeWidth={1.75} /> : <Sun size={15} strokeWidth={1.75} />}
         </IconBtn>
+        <Tip label="Save (⌘S)" side="bottom">
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            onClick={save}
+            disabled={saved && !dirty}
+            className="ml-1 flex h-8 items-center gap-1.5 rounded-[8px] bg-inverse px-3 text-[13px] font-semibold text-on-inverse disabled:opacity-35"
+          >
+            <Save size={14} strokeWidth={2} /> Save
+          </motion.button>
+        </Tip>
+        <span className="mx-1 h-5 w-px bg-line" />
+        <Tip label="Back to designs" side="bottom">
+          <button
+            onClick={exit}
+            className="flex h-8 items-center gap-1.5 rounded-[8px] px-2.5 text-[13px] font-medium text-fg-2 shadow-[inset_0_0_0_1px_var(--line-strong)] hover:bg-hover hover:text-fg"
+          >
+            <X size={14} strokeWidth={2} /> Exit
+          </button>
+        </Tip>
       </div>
       <CssDialog open={cssOpen} onClose={() => setCssOpen(false)} />
+      <ConfirmDialog state={confirm} onClose={() => setConfirm(null)} />
     </header>
+  )
+}
+
+function SaveStatus({ dirty, saved, justSaved }: { dirty: boolean; saved: boolean; justSaved: boolean }) {
+  const label = justSaved ? 'Saved' : !saved ? 'Not saved' : dirty ? 'Unsaved changes' : 'Saved'
+  return (
+    <AnimatePresence mode="popLayout" initial={false}>
+      <motion.span
+        key={label}
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -4 }}
+        transition={SPRING}
+        role="status"
+        className="hidden items-center gap-1.5 text-[12px] whitespace-nowrap text-fg-3 md:flex"
+      >
+        {justSaved ? <Check size={13} className="text-fg" /> : dirty && <span className="size-1.5 rounded-full bg-fg" />}
+        {label}
+      </motion.span>
+    </AnimatePresence>
   )
 }
 

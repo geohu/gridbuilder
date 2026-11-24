@@ -14,6 +14,15 @@ export interface Track {
 }
 
 /** A named pane spanning grid cells. Placement is 1-based, in track indices. */
+/** How a panel handles content larger than itself. */
+export type Overflow = 'responsive' | 'scroll'
+
+/** A component placed in a panel, by library type. */
+export interface Item {
+  id: string
+  type: string
+}
+
 export interface Area {
   id: string
   name: string
@@ -21,6 +30,8 @@ export interface Area {
   r: number
   w: number
   h: number
+  items: Item[]
+  overflow: Overflow
 }
 
 export interface Doc {
@@ -70,6 +81,27 @@ function removeTrackDoc(d: Doc, axis: Axis, index: number): Doc {
   return { ...d, [k]: d[k].filter((_, i) => i !== index), areas }
 }
 
+/** A named, saved configuration of the workspace. */
+export interface SavedDesign {
+  id: string
+  name: string
+  doc: Doc
+  theme: Theme
+  mode: Mode
+  createdAt: number
+  updatedAt: number
+}
+
+export const UNTITLED = 'Untitled design'
+
+/** Everything a save captures, for comparing the workspace against its saved copy. */
+const snapshot = (x: { name: string; doc: Doc; theme: Theme; mode: Mode }) => JSON.stringify([x.name.trim() || UNTITLED, x.doc, x.theme, x.mode])
+
+/** Bring a doc saved by an older version of the app up to date. */
+function upgradeDoc(doc: Doc): Doc {
+  return { ...doc, areas: doc.areas.map((a) => ({ ...a, items: a.items ?? [], overflow: a.overflow ?? 'responsive' })) }
+}
+
 interface State {
   doc: Doc
   past: Doc[]
@@ -77,12 +109,37 @@ interface State {
   theme: Theme
   mode: Mode
   renamingId: string | null
+  /** Component library modal: open, and the panel it adds to (null = browse only). */
+  library: { open: boolean; target: string | null }
+  /** Name of the design being edited (header field). */
+  name: string
+  /** Saved design this workspace was opened from / last saved as; null if never saved. */
+  currentId: string | null
+  designs: SavedDesign[]
+
+  /** Which screen is showing: the list of saved designs, or the builder. */
+  view: 'list' | 'builder'
+  /** Light/dark for the designs list (each design keeps its own style). */
+  listMode: Mode
+  saveDesign: () => void
+  saveAsCopy: () => void
+  openDesign: (id: string) => void
+  /** Start an unsaved design from a template (default: the support grid) and open the builder. */
+  newDesign: (templateId?: string) => void
+  renameDesign: (id: string, name: string) => void
+  exitToList: () => void
+  duplicateDesign: (id: string) => void
+  deleteDesign: (id: string) => void
 
   set: (patch: Partial<State>) => void
   commit: (fn: (d: Doc) => Doc) => void
   undo: () => void
   redo: () => void
-  addArea: (a: Omit<Area, 'id' | 'name'> & { name?: string }) => string
+  addArea: (a: Omit<Area, 'id' | 'name' | 'items' | 'overflow'> & { name?: string }) => string
+  addItem: (areaId: string, type: string) => void
+  removeItem: (areaId: string, itemId: string) => void
+  moveItem: (areaId: string, itemId: string, dir: -1 | 1) => void
+  setOverflow: (areaId: string, overflow: Overflow) => void
   updateArea: (id: string, patch: Partial<Area>) => void
   removeArea: (id: string) => void
   insertTrack: (axis: Axis, at: number, track?: Partial<Track>) => void
@@ -91,6 +148,8 @@ interface State {
   /** Split a pane in two along an axis; neighbouring panes stretch so no gaps appear. */
   split: (id: string, axis: Axis) => void
   setTracks: (axis: Axis, tracks: Track[]) => void
+  /** Restore the default support grid (undoable). */
+  resetGrid: () => void
 }
 
 export const useApp = create<State>()(
@@ -102,6 +161,60 @@ export const useApp = create<State>()(
       theme: 'utility',
       mode: 'light',
       renamingId: null,
+      library: { open: false, target: null },
+      name: UNTITLED,
+      currentId: null,
+      designs: [],
+      view: 'list',
+      listMode: 'light',
+
+      saveDesign: () => {
+        const { name, doc, theme, mode, currentId, designs } = get()
+        const now = Date.now()
+        const clean = name.trim() || UNTITLED
+        if (currentId && designs.some((d) => d.id === currentId)) {
+          set({ name: clean, designs: designs.map((d) => (d.id === currentId ? { ...d, name: clean, doc, theme, mode, updatedAt: now } : d)) })
+        } else {
+          const id = uid('d')
+          set({ name: clean, currentId: id, designs: [{ id, name: clean, doc, theme, mode, createdAt: now, updatedAt: now }, ...designs] })
+        }
+      },
+      saveAsCopy: () => {
+        const { name, doc, theme, mode, designs } = get()
+        const now = Date.now()
+        const id = uid('d')
+        const copy = `${name.trim() || UNTITLED} copy`
+        set({ name: copy, currentId: id, designs: [{ id, name: copy, doc, theme, mode, createdAt: now, updatedAt: now }, ...designs] })
+      },
+      openDesign: (id) => {
+        const d = get().designs.find((x) => x.id === id)
+        if (!d) return
+        // A fresh history per design: undo shouldn't cross into another design.
+        set({ doc: upgradeDoc(d.doc), theme: d.theme, mode: d.mode, name: d.name, currentId: d.id, past: [], future: [], renamingId: null, view: 'builder' })
+      },
+      newDesign: (templateId) => {
+        const t = TEMPLATES.find((x) => x.id === templateId) ?? TEMPLATES[0]
+        set({ doc: t.build(), name: UNTITLED, currentId: null, past: [], future: [], renamingId: null, view: 'builder' })
+      },
+      renameDesign: (id, name) => {
+        const clean = name.trim() || UNTITLED
+        set((s) => ({
+          designs: s.designs.map((d) => (d.id === id ? { ...d, name: clean, updatedAt: Date.now() } : d)),
+          // Keep the builder's name in step if this design is the one loaded.
+          name: s.currentId === id ? clean : s.name,
+        }))
+      },
+      exitToList: () => set({ view: 'list', renamingId: null, library: { open: false, target: null } }),
+      duplicateDesign: (id) => {
+        const d = get().designs.find((x) => x.id === id)
+        if (!d) return
+        const now = Date.now()
+        const copy = { ...d, id: uid('d'), name: `${d.name} copy`, createdAt: now, updatedAt: now }
+        const designs = [...get().designs]
+        designs.splice(designs.indexOf(d) + 1, 0, copy)
+        set({ designs })
+      },
+      deleteDesign: (id) => set((s) => ({ designs: s.designs.filter((d) => d.id !== id), currentId: s.currentId === id ? null : s.currentId })),
 
       set: (patch) => set(patch),
       commit: (fn) => {
@@ -121,12 +234,30 @@ export const useApp = create<State>()(
 
       addArea: (a) => {
         const id = uid('a')
-        get().commit((d) => ({ ...d, areas: [...d.areas, { name: `Panel ${d.areas.length + 1}`, ...a, id }] }))
+        get().commit((d) => ({ ...d, areas: [...d.areas, { name: `Panel ${d.areas.length + 1}`, items: [], overflow: 'responsive', ...a, id }] }))
         set({ renamingId: id })
         return id
       },
       updateArea: (id, patch) => get().commit((d) => ({ ...d, areas: d.areas.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
       removeArea: (id) => get().commit((d) => ({ ...d, areas: d.areas.filter((a) => a.id !== id) })),
+      addItem: (areaId, type) =>
+        get().commit((d) => ({ ...d, areas: d.areas.map((a) => (a.id === areaId ? { ...a, items: [...a.items, { id: uid('i'), type }] } : a)) })),
+      removeItem: (areaId, itemId) =>
+        get().commit((d) => ({ ...d, areas: d.areas.map((a) => (a.id === areaId ? { ...a, items: a.items.filter((i) => i.id !== itemId) } : a)) })),
+      moveItem: (areaId, itemId, dir) =>
+        get().commit((d) => ({
+          ...d,
+          areas: d.areas.map((a) => {
+            if (a.id !== areaId) return a
+            const i = a.items.findIndex((x) => x.id === itemId)
+            const j = i + dir
+            if (i < 0 || j < 0 || j >= a.items.length) return a
+            const items = [...a.items]
+            ;[items[i], items[j]] = [items[j], items[i]]
+            return { ...a, items }
+          }),
+        })),
+      setOverflow: (areaId, overflow) => get().updateArea(areaId, { overflow }),
 
       insertTrack: (axis, at, track) => get().commit((d) => insertTrackDoc(d, axis, at, track)),
       removeTrack: (axis, index, count = 1) =>
@@ -149,8 +280,8 @@ export const useApp = create<State>()(
           tracks.splice(at, 0, { id: uid(axis), size: half, unit: src.unit })
           const pane: Area =
             axis === 'col'
-              ? { id: uid('a'), name: `Panel ${d.areas.length + 1}`, c: a.c + a.w, r: a.r, w: 1, h: a.h }
-              : { id: uid('a'), name: `Panel ${d.areas.length + 1}`, c: a.c, r: a.r + a.h, w: a.w, h: 1 }
+              ? { id: uid('a'), name: `Panel ${d.areas.length + 1}`, c: a.c + a.w, r: a.r, w: 1, h: a.h, items: [], overflow: 'responsive' }
+              : { id: uid('a'), name: `Panel ${d.areas.length + 1}`, c: a.c, r: a.r + a.h, w: a.w, h: 1, items: [], overflow: 'responsive' }
           // Other panes covering the halved track stretch across the new one; later panes shift.
           const areas = d.areas.map((x) => {
             const start = x[p] - 1
@@ -163,14 +294,38 @@ export const useApp = create<State>()(
           return { ...d, [k]: tracks, areas: [...areas, pane] }
         }),
       setTracks: (axis, tracks) => get().commit((d) => ({ ...d, [key(axis)]: tracks })),
+      resetGrid: () => {
+        get().commit((d) => (isDefaultGrid(d) ? d : TEMPLATES[0].build()))
+        set({ renamingId: null })
+      },
     }),
     {
       name: 'crm-grid-product',
-      version: 1,
-      partialize: ({ doc, theme, mode }) => ({ doc, theme, mode }),
+      version: 3,
+      partialize: ({ doc, theme, mode, name, currentId, designs, view, listMode }) => ({ doc, theme, mode, name, currentId, designs, view, listMode }),
+      // v1 panes had no components or overflow setting; v3 added saved designs (defaults fill in).
+      migrate: (state) => {
+        const s = state as { doc?: Doc; designs?: SavedDesign[] }
+        if (s?.doc) s.doc = upgradeDoc(s.doc)
+        if (s?.designs) s.designs = s.designs.map((d) => ({ ...d, doc: upgradeDoc(d.doc) }))
+        return s as never
+      },
     },
   ),
 )
+
+/** Same structure as the default grid, ignoring generated ids. */
+const shape = (d: Doc) =>
+  JSON.stringify([d.columns.map((t) => [t.size, t.unit]), d.rows.map((t) => [t.size, t.unit]), d.areas.map((a) => [a.name, a.c, a.r, a.w, a.h, a.items.map((i) => i.type), a.overflow])])
+const DEFAULT_SHAPE = shape(TEMPLATES[0].build())
+export const isDefaultGrid = (d: Doc) => shape(d) === DEFAULT_SHAPE
+
+/** True when the workspace differs from its saved copy (or has never been saved). */
+export const useDirty = () =>
+  useApp((s) => {
+    const saved = s.designs.find((d) => d.id === s.currentId)
+    return !saved || snapshot(s) !== snapshot(saved)
+  })
 
 /* ---------------- Track math ---------------- */
 
@@ -229,6 +384,11 @@ export function toCss(doc: Doc, theme: Theme) {
     `  padding: ${padding}px;`,
     '}',
     '',
-    ...doc.areas.map((a, i) => `.${names[i]} { grid-area: ${named ? names[i] : `${a.r} / ${a.c} / span ${a.h} / span ${a.w}`}; }`),
+    '/* Responsive panels fit their content; Scroll panels keep it at natural size and scroll. */',
+    ...doc.areas.map((a, i) => {
+      const area = named ? names[i] : `${a.r} / ${a.c} / span ${a.h} / span ${a.w}`
+      const flow = a.overflow === 'scroll' ? 'overflow: auto;' : 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;'
+      return `.${names[i]} { grid-area: ${area}; ${flow} }`
+    }),
   ].join('\n')
 }

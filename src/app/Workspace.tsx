@@ -1,10 +1,11 @@
-import { Columns2, MoreHorizontal, Plus, Rows2, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Check, Columns2, MoreHorizontal, Plus, Rows2, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent, type RefObject } from 'react'
 import { Tip } from '../components/ui'
 import { cn } from '../lib/hooks'
 import { SPRING } from './chrome'
-import { resolveTracks, SPACING, trackCss, trackLabel, useApp, type Area, type Axis, type Resolved, type Track } from './store'
+import { getComponent } from './library/registry'
+import { resolveTracks, SPACING, trackCss, trackLabel, useApp, type Area, type Axis, type Item, type Overflow, type Resolved, type Track } from './store'
 
 type Cell = { col: number; row: number }
 type Rect = { c: number; r: number; w: number; h: number }
@@ -143,7 +144,7 @@ export function Workspace() {
           ))}
           <AnimatePresence>
             {doc.areas.map((a) => (
-              <Pane key={a.id} area={a} radius={sp.radius} instant={instant} dims={`${spanPx(rc.tracks, a.c, a.w)} × ${spanPx(rr.tracks, a.r, a.h)}`} />
+              <Pane key={a.id} area={a} radius={sp.radius} instant={instant} dims={`${spanPx(rc.tracks, a.c, a.w)} × ${spanPx(rr.tracks, a.r, a.h)}`} short={spanPx(rr.tracks, a.r, a.h) < 100} />
             ))}
           </AnimatePresence>
         </div>
@@ -223,8 +224,8 @@ export function Workspace() {
 
 /**
  * A boundary between tracks (or a workspace edge). Hovering reveals a line and a "+"
- * pinned at the start of the gutter (in the header strip for columns); dragging the
- * rest of an inner gutter resizes the neighbouring tracks.
+ * centred along the gutter's length; dragging the rest of an inner gutter resizes
+ * the neighbouring tracks.
  */
 function Gutter({
   axis, at, from, to, edge, active, onInsert, onPointerDown, onPointerMove, onPointerUp,
@@ -275,7 +276,7 @@ function Gutter({
             exit={{ opacity: 0, scale: 0.6 }}
             transition={SPRING}
             className="absolute"
-            style={isCol ? { top: 9, left: plusAt } : { left: 21, top: plusAt }}
+            style={isCol ? { top: '50%', marginTop: -11, left: plusAt } : { left: '50%', marginLeft: -11, top: plusAt }}
           >
             <Tip label={`Add ${noun}`} side={isCol ? 'right' : 'bottom'}>
               <button
@@ -294,11 +295,12 @@ function Gutter({
   )
 }
 
-function Pane({ area, radius, instant, dims }: { area: Area; radius: number; instant: boolean; dims: string }) {
+function Pane({ area, radius, instant, dims, short }: { area: Area; radius: number; instant: boolean; dims: string; short: boolean }) {
   const renaming = useApp((s) => s.renamingId === area.id)
   const cols = useApp((s) => s.doc.columns.length)
   const rows = useApp((s) => s.doc.rows.length)
-  const { set, updateArea, removeArea, split, removeTrack } = useApp.getState()
+  const { set, updateArea, removeArea, split, removeTrack, setOverflow } = useApp.getState()
+  const openLibrary = () => set({ library: { open: true, target: area.id } })
   const [menu, setMenu] = useState(false)
 
   const splitRight = () => split(area.id, 'col')
@@ -317,7 +319,8 @@ function Pane({ area, radius, instant, dims }: { area: Area; radius: number; ins
       className="pane group/pane @container relative z-10 flex min-h-0 min-w-0 flex-col"
       aria-label={area.name}
     >
-      <header className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-2">
+      {/* Children with `layout` are scale-corrected, so text doesn't stretch while the pane animates. */}
+      <motion.header layout="position" transition={instant ? { duration: 0 } : SPRING} className="flex h-10 shrink-0 items-center gap-1 border-b border-line px-2">
         {renaming ? (
           <input
             autoFocus
@@ -339,7 +342,17 @@ function Pane({ area, radius, instant, dims }: { area: Area; radius: number; ins
             {area.name}
           </h2>
         )}
+        {area.overflow === 'scroll' && !renaming && (
+          <span title="Panel scrolls" className="hidden shrink-0 rounded-[4px] px-1 font-mono text-[10px] text-fg-3 shadow-[inset_0_0_0_1px_var(--line-strong)] @[10rem]:inline">scroll</span>
+        )}
+        {/* Too short for the empty-state button below, so keep adding reachable here. */}
+        {short && area.items.length === 0 && (
+          <span className="ml-auto">
+            <HeaderButton label="Add component" onClick={openLibrary}><Plus size={15} strokeWidth={1.75} /></HeaderButton>
+          </span>
+        )}
         <div className="ml-auto flex items-center opacity-0 transition-opacity group-hover/pane:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
+          {!(short && area.items.length === 0) && <HeaderButton label="Add component" onClick={openLibrary}><Plus size={15} strokeWidth={1.75} /></HeaderButton>}
           <span className="hidden @[12rem]:contents">
             <HeaderButton label="Split right" onClick={splitRight}><Columns2 size={14} strokeWidth={1.75} /></HeaderButton>
             <HeaderButton label="Split down" onClick={splitDown}><Rows2 size={14} strokeWidth={1.75} /></HeaderButton>
@@ -347,7 +360,13 @@ function Pane({ area, radius, instant, dims }: { area: Area; radius: number; ins
           <div className="relative">
             <HeaderButton label="More" onClick={() => setMenu(!menu)} expanded={menu}><MoreHorizontal size={15} strokeWidth={1.75} /></HeaderButton>
             <Menu open={menu} onClose={() => setMenu(false)}>
+              <MenuItem onClick={openLibrary}>Add component…</MenuItem>
               <MenuItem onClick={() => set({ renamingId: area.id })}>Rename</MenuItem>
+              <MenuSep />
+              <p className="px-2.5 pt-1 pb-0.5 text-[11px] font-semibold tracking-wide text-fg-3 uppercase">Content</p>
+              <OverflowItem value="responsive" current={area.overflow} onPick={(o) => setOverflow(area.id, o)} hint="Fits the panel; lists scroll inside" />
+              <OverflowItem value="scroll" current={area.overflow} onPick={(o) => setOverflow(area.id, o)} hint="Natural size; the panel scrolls" />
+              <MenuSep />
               <MenuItem onClick={splitRight}>Split right</MenuItem>
               <MenuItem onClick={splitDown}>Split down</MenuItem>
               <MenuSep />
@@ -358,10 +377,24 @@ function Pane({ area, radius, instant, dims }: { area: Area; radius: number; ins
             </Menu>
           </div>
         </div>
-      </header>
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-2">
-        <span className="truncate font-mono text-[11px] text-fg-3 opacity-0 transition-opacity group-hover/pane:opacity-100">{dims}</span>
-      </div>
+      </motion.header>
+      <motion.div
+        layout="position"
+        transition={instant ? { duration: 0 } : SPRING}
+        // Responsive: a flex column that never scrolls. Scroll: content keeps its size and the panel scrolls.
+        className={cn('flex min-h-0 flex-1 flex-col', area.overflow === 'scroll' ? 'scroll-thin overflow-auto' : 'overflow-hidden')}
+        style={{ borderBottomLeftRadius: radius, borderBottomRightRadius: radius }}
+      >
+        {area.items.length === 0 ? (
+          !short && <EmptyPane dims={dims} onAdd={openLibrary} />
+        ) : (
+          <AnimatePresence initial={false}>
+            {area.items.map((it, i) => (
+              <ItemFrame key={it.id} areaId={area.id} item={it} overflow={area.overflow} first={i === 0} last={i === area.items.length - 1} />
+            ))}
+          </AnimatePresence>
+        )}
+      </motion.div>
     </motion.section>
   )
 }
@@ -406,6 +439,68 @@ const SmallRemove = ({ label, onClick }: { label: string; onClick: () => void })
     <X size={11} /> {label}
   </button>
 )
+
+function EmptyPane({ dims, onAdd }: { dims: string; onAdd: () => void }) {
+  return (
+    <div className="@container flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-2">
+      <button
+        onClick={onAdd}
+        aria-label="Add component"
+        className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-medium text-fg-3 shadow-[inset_0_0_0_1px_var(--line-strong)] transition-colors hover:bg-hover hover:text-fg"
+      >
+        <Plus size={14} /> <span className="hidden @[9rem]:inline">Add component</span>
+      </button>
+      <span className="hidden font-mono text-[11px] text-fg-3 opacity-0 transition-opacity group-hover/pane:opacity-100 @[9rem]:inline">{dims}</span>
+    </div>
+  )
+}
+
+/** One placed component. Sizing follows the panel's overflow mode and the component's own sizing rule. */
+function ItemFrame({ areaId, item, overflow, first, last }: { areaId: string; item: Item; overflow: Overflow; first: boolean; last: boolean }) {
+  const def = getComponent(item.type)
+  const { removeItem, moveItem } = useApp.getState()
+  if (!def) return null
+  const fill = overflow === 'responsive' && def.sizing === 'fill'
+  return (
+    <motion.div
+      layout="position"
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, transition: { duration: 0.1 } }}
+      transition={SPRING}
+      // Named container so the hover toolbar can adapt to this component's width.
+      className={cn('group/item @container/item relative flex flex-col border-b border-line last:border-b-0', fill ? 'min-h-0 flex-1' : 'shrink-0')}
+      style={overflow === 'scroll' ? { minWidth: def.min.w, minHeight: def.sizing === 'fill' ? def.min.h : undefined } : undefined}
+    >
+      <div className={cn('@container flex flex-col', fill && 'min-h-0 flex-1')}>{def.render({ overflow })}</div>
+      {/* Narrow components (e.g. a nav rail) get a vertical, icon-only toolbar that fits inside them. */}
+      <div className="pointer-events-none absolute top-1 right-1 z-10 flex flex-col items-center gap-0.5 rounded-[7px] bg-surface p-0.5 @[13rem]/item:top-1.5 @[13rem]/item:right-1.5 @[13rem]/item:flex-row opacity-0 shadow-[0_0_0_1px_var(--line-strong),0_4px_12px_-4px_rgb(0_0_0/0.2)] transition-opacity group-hover/item:pointer-events-auto group-hover/item:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
+        <span className="hidden px-1.5 text-[11px] font-medium whitespace-nowrap text-fg-2 @[13rem]/item:inline">{def.name}</span>
+        <ItemButton label="Move up" disabled={first} onClick={() => moveItem(areaId, item.id, -1)}><ArrowUp size={12} /></ItemButton>
+        <ItemButton label="Move down" disabled={last} onClick={() => moveItem(areaId, item.id, 1)}><ArrowDown size={12} /></ItemButton>
+        <ItemButton label={`Remove ${def.name}`} onClick={() => removeItem(areaId, item.id)}><X size={12} /></ItemButton>
+      </div>
+    </motion.div>
+  )
+}
+
+const ItemButton = ({ label, onClick, disabled, children }: { label: string; onClick: () => void; disabled?: boolean; children: React.ReactNode }) => (
+  <button aria-label={label} title={label} disabled={disabled} onClick={onClick} className="flex size-6 items-center justify-center rounded-[5px] text-fg-3 hover:bg-hover hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent">
+    {children}
+  </button>
+)
+
+function OverflowItem({ value, current, onPick, hint }: { value: Overflow; current: Overflow; onPick: (o: Overflow) => void; hint: string }) {
+  return (
+    <button role="menuitemradio" aria-checked={value === current} onClick={() => onPick(value)} className="flex w-full items-start gap-2 rounded-[6px] px-2.5 py-1.5 text-left hover:bg-hover">
+      <span className="mt-0.5 flex size-3.5 shrink-0 items-center justify-center">{value === current && <Check size={13} strokeWidth={2.5} />}</span>
+      <span>
+        <span className="block text-[13px]">{value === 'responsive' ? 'Responsive' : 'Scroll'}{value === 'responsive' && <span className="text-fg-3"> · default</span>}</span>
+        <span className="block text-[11.5px] text-fg-3">{hint}</span>
+      </span>
+    </button>
+  )
+}
 
 function HeaderButton({ label, onClick, children, expanded }: { label: string; onClick: () => void; children: React.ReactNode; expanded?: boolean }) {
   return (
@@ -462,9 +557,9 @@ export function Menu({ open, onClose, children, align = 'right' }: { open: boole
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: placement.up ? 4 : -4, scale: 0.97, transition: { duration: 0.1 } }}
           transition={SPRING}
-          onClick={(e) => (e.target as HTMLElement).closest('[role=menuitem]') && onClose()}
+          onClick={(e) => (e.target as HTMLElement).closest('[role=menuitem], [role=menuitemradio]') && onClose()}
           className={cn(
-            'absolute z-50 min-w-44 rounded-[10px] bg-surface p-1 shadow-[0_0_0_1px_var(--line),0_12px_32px_-8px_rgb(0_0_0/0.25)]',
+            'absolute z-50 min-w-56 rounded-[10px] bg-surface p-1 shadow-[0_0_0_1px_var(--line),0_12px_32px_-8px_rgb(0_0_0/0.25)]',
             placement.up ? 'bottom-full mb-1' : 'top-full mt-1',
             placement.x === 'right' ? 'right-0' : 'left-0',
             placement.up ? (placement.x === 'right' ? 'origin-bottom-right' : 'origin-bottom-left') : placement.x === 'right' ? 'origin-top-right' : 'origin-top-left',
