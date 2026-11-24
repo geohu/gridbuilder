@@ -1,0 +1,162 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-mode="dark"], [data-mode="dark"] *));
+
+/* ------------------------------------------------------------------
+   Design tokens
+   Semantic colors map to Tailwind utilities (bg-surface, text-fg-2 …).
+   Raw values live on <html> and swap by theme × mode × density.
+------------------------------------------------------------------- */
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", monospace;
+
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-inverse: var(--inverse);
+  --color-on-inverse: var(--on-inverse);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+
+  --radius-control: var(--r-control);
+  --radius-chip: var(--r-chip);
+}
+
+/* Direction A — Quiet Utility: flush panes, hairlines, tight radii */
+[data-theme="utility"] {
+  --canvas: #f5f5f5;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --line: #e7e7e7;
+  --line-strong: #d4d4d4;
+  --fg: #111111;
+  --fg-2: #555555;
+  --fg-3: #8c8c8c;
+  --inverse: #111111;
+  --on-inverse: #ffffff;
+  --hover: rgb(0 0 0 / 0.035);
+  --selected: rgb(0 0 0 / 0.06);
+  --backdrop: rgb(0 0 0 / 0.18);
+
+  --shell-bg: var(--line);
+  --gap: 1px;
+  --shell-pad: 0px;
+  --r-control: 6px;
+  --r-chip: 4px;
+  --pane-border: transparent;
+  --pane-shadow: none;
+  --card-border: var(--line);
+  --card-shadow: none;
+}
+[data-theme="utility"][data-mode="dark"] {
+  --canvas: #0a0a0a;
+  --surface: #111111;
+  --surface-2: #151515;
+  --line: #232323;
+  --line-strong: #333333;
+  --fg: #ededed;
+  --fg-2: #a3a3a3;
+  --fg-3: #6b6b6b;
+  --inverse: #ededed;
+  --on-inverse: #111111;
+  --hover: rgb(255 255 255 / 0.04);
+  --selected: rgb(255 255 255 / 0.075);
+  --backdrop: rgb(0 0 0 / 0.5);
+}
+
+/* Direction B — Soft Surface: floating cards, warm greys, generous radii */
+[data-theme="soft"] {
+  --canvas: #ebe9e5;
+  --surface: #fbfaf8;
+  --surface-2: #f4f2ee;
+  --line: #e6e2dc;
+  --line-strong: #d5d0c8;
+  --fg: #1d1c1a;
+  --fg-2: #5f5b55;
+  --fg-3: #95908a;
+  --inverse: #1d1c1a;
+  --on-inverse: #fbfaf8;
+  --hover: rgb(40 30 20 / 0.04);
+  --selected: rgb(40 30 20 / 0.07);
+  --backdrop: rgb(40 30 20 / 0.16);
+
+  --shell-bg: var(--canvas);
+  --gap: 10px;
+  --shell-pad: 10px;
+  --r-control: 10px;
+  --r-chip: 999px;
+  --pane-border: rgb(40 30 20 / 0.06);
+  --pane-shadow: 0 1px 2px rgb(40 30 20 / 0.04), 0 12px 32px -18px rgb(40 30 20 / 0.22);
+  --card-border: rgb(40 30 20 / 0.06);
+  --card-shadow: var(--pane-shadow);
+}
+[data-theme="soft"][data-mode="dark"] {
+  --canvas: #121110;
+  --surface: #1c1b19;
+  --surface-2: #232220;
+  --line: #2d2b28;
+  --line-strong: #3a3834;
+  --fg: #edebe7;
+  --fg-2: #a8a39c;
+  --fg-3: #6f6b65;
+  --inverse: #edebe7;
+  --on-inverse: #1c1b19;
+  --hover: rgb(255 250 240 / 0.04);
+  --selected: rgb(255 250 240 / 0.075);
+  --backdrop: rgb(0 0 0 / 0.5);
+  --pane-border: rgb(255 250 240 / 0.05);
+  --pane-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 16px 36px -20px rgb(0 0 0 / 0.7);
+  --card-border: rgb(255 250 240 / 0.05);
+}
+
+/* Density scales Tailwind's spacing unit inside its scope, so every p-*, gap-*, h-* follows */
+[data-density="compact"] { --spacing: 0.21rem; }
+[data-density="comfortable"] { --spacing: 0.25rem; }
+[data-density="spacious"] { --spacing: 0.3rem; }
+
+html { font-size: 14px; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
+  overflow: hidden;
+}
+::selection { background: var(--inverse); color: var(--on-inverse); }
+@layer base { :focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; } }
+
+/* Brief color crossfade while switching theme/mode */
+html.theming *, html.theming *::before, html.theming *::after {
+  transition: background-color 0.28s ease, border-color 0.28s ease, color 0.28s ease, box-shadow 0.28s ease !important;
+}
+
+/* ---------------- Surfaces ---------------- */
+.pane {
+  background: var(--surface);
+  box-shadow: var(--pane-shadow), inset 0 0 0 1px var(--pane-border);
+}
+.card {
+  background: var(--surface);
+  box-shadow: var(--card-shadow), inset 0 0 0 1px var(--card-border);
+}
+.shell {
+  background: var(--shell-bg);
+  gap: var(--gap);
+  padding: var(--shell-pad);
+}
+
+/* ---------------- Scrollbars ---------------- */
+.scroll-thin { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  html.theming * { transition: none !important; }
+}
