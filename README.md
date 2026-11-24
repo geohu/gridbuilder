@@ -1,4 +1,4 @@
-# CRM Grid
+# Gridbuilder
 
 A customer support workspace shown as the product, with no content, just its grid. It starts as the support layout (Navigation · Queue · Conversation · Context), and the user reshapes it in place.
 
